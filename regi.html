@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>M-Ledger – Local Wallet</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0f0f11;
+      color: #e0e0e0;
+      margin: 0;
+      padding: 20px;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+  }
+  .container {
+      width: 100%;
+      max-width: 420px;
+      background: #1a1a1e;
+      padding: 24px;
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+  }
+  h2 {
+      text-align: center;
+      color: #4ade80;
+      margin: 0 0 20px;
+  }
+  input, button {
+      width: 100%;
+      padding: 14px 16px;
+      margin: 10px 0 4px;
+      border-radius: 10px;
+      border: none;
+      font-size: 16px;
+  }
+  input {
+      background: #2a2a2f;
+      color: white;
+  }
+  input::placeholder {
+      color: #777;
+  }
+  button {
+      background: #4ade80;
+      color: black;
+      font-weight: 600;
+      cursor: pointer;
+  }
+  button:hover {
+      background: #3ac96e;
+  }
+  button.secondary {
+      background: #444;
+      color: #ccc;
+  }
+  button.secondary:hover {
+      background: #555;
+  }
+  .hidden { display: none; }
+  .status {
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 10px;
+      background: #222;
+      text-align: center;
+      min-height: 24px;
+  }
+  .error {
+      background: #4a1d1d;
+      color: #ff9999;
+  }
+  .success {
+      background: #1a3a1a;
+      color: #aaffaa;
+  }
+  .balance-line {
+      text-align: center;
+      font-size: 1.3rem;
+      margin: 20px 0;
+      color: #4ade80;
+  }
+  hr {
+      border: none;
+      border-top: 1px solid #333;
+      margin: 24px 0;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <div id="register">
+      <h2>Create Account</h2>
+      <input id="rName" placeholder="Full name" autocomplete="name">
+      <input id="rPhone" placeholder="Phone number (e.g. 0712345678)" autocomplete="tel">
+      <input id="rPass" type="password" placeholder="Password" autocomplete="new-password">
+      <button onclick="register()">Create Account</button>
+      <button class="secondary" onclick="show('login')">Already have an account? Login</button>
+  </div>
+
+  <div id="login" class="hidden">
+      <h2>Login</h2>
+      <input id="lPhone" placeholder="Phone number" autocomplete="tel">
+      <input id="lPass" type="password" placeholder="Password" autocomplete="current-password">
+      <button onclick="login()">Login</button>
+      <button class="secondary" onclick="show('register')">Back to Register</button>
+  </div>
+
+  <div id="app" class="hidden">
+      <h2 id="welcome"></h2>
+      
+      <div class="balance-line">
+          Balance: <b id="balance">—</b>
+      </div>
+
+      <hr>
+      
+      <input id="toPhone" placeholder="Recipient phone number">
+      <input id="amount" type="number" placeholder="Amount (KSh)" min="1" step="1">
+      <button onclick="sendMoney()">Send Money</button>
+      <button class="secondary" onclick="logout()">Logout</button>
+  </div>
+
+  <div id="status" class="status">Ready</div>
+
+</div>
+
+<script>
+const API = "http://localhost:3000/api";
+let currentUser = null;
+
+function show(screen) {
+    document.querySelectorAll('#register, #login, #app').forEach(el => {
+        el.classList.add('hidden');
+    });
+    document.getElementById(screen).classList.remove('hidden');
+}
+
+function setStatus(message, type = 'info') {
+    const el = document.getElementById('status');
+    el.textContent = message;
+    el.className = 'status';
+    if (type === 'error') el.classList.add('error');
+    if (type === 'success') el.classList.add('success');
+}
+
+function updateBalanceUI(balance) {
+    document.getElementById('balance').textContent = `KSh ${Number(balance).toFixed(2)}`;
+}
+
+async function register() {
+    const name = document.getElementById('rName').value.trim();
+    const phone = document.getElementById('rPhone').value.trim();
+    const pass = document.getElementById('rPass').value;
+
+    if (!name || !phone || !pass) {
+        setStatus("Please fill all fields", "error");
+        return;
+    }
+
+    try {
+        const res = await fetch(`${API}/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, phone, password: pass })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+            setStatus(data.error || "Registration failed", "error");
+            return;
+        }
+
+        setStatus(data.message || "Account created! Please login.", "success");
+        show('login');
+    } catch (err) {
+        setStatus("Cannot connect to server. Is backend running?", "error");
+    }
+}
+
+async function login() {
+    const phone = document.getElementById('lPhone').value.trim();
+    const pass = document.getElementById('lPass').value;
+
+    if (!phone || !pass) {
+        setStatus("Enter phone and password", "error");
+        return;
+    }
+
+    try {
+        const res = await fetch(`${API}/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone, password: pass })
+        });
+
+        const data = await res.json();
+
+        if (!data.success) {
+            setStatus(data.error || "Login failed", "error");
+            return;
+        }
+
+        currentUser = data.user;
+        document.getElementById('welcome').textContent = `Hello, ${currentUser.full_name}`;
+        updateBalanceUI(currentUser.balance);
+        show('app');
+        setStatus("Logged in successfully", "success");
+    } catch (err) {
+        setStatus("Cannot connect to server", "error");
+    }
+}
+
+function logout() {
+    currentUser = null;
+    show('login');
+    setStatus("Logged out", "info");
+}
+
+async function sendMoney() {
+    if (!currentUser) {
+        setStatus("Not logged in", "error");
+        return;
+    }
+
+    const toPhone = document.getElementById('toPhone').value.trim();
+    const amountStr = document.getElementById('amount').value.trim();
+    const amount = Number(amountStr);
+
+    if (!toPhone) {
+        setStatus("Enter recipient phone number", "error");
+        return;
+    }
+
+    if (!amount || amount <= 0) {
+        setStatus("Enter a valid amount", "error");
+        return;
+    }
+
+    setStatus("Processing transfer...", "info");
+
+    try {
+        const res = await fetch(`${API}/send`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                fromPhone: currentUser.phone,
+                toPhone,
+                amount
+            })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+            setStatus(data.error || "Transfer failed", "error");
+            return;
+        }
+
+        // Update local user balance
+        currentUser.balance = data.newBalance;
+        updateBalanceUI(data.newBalance);
+
+        setStatus(`Success! Sent KSh ${amount} to ${toPhone}`, "success");
+        
+        // Optional: clear inputs
+        document.getElementById('toPhone').value = '';
+        document.getElementById('amount').value = '';
+    } catch (err) {
+        setStatus("Connection error – is the backend running?", "error");
+    }
+}
+
+// Start with login screen
+show('login');
+</script>
+
+</body>
+</html>

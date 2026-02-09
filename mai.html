@@ -1,0 +1,149 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>M-Ledger</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body {
+    font-family: system-ui;
+    background: #111;
+    color: #eee;
+    display: flex;
+    justify-content: center;
+    padding: 20px;
+}
+.container {
+    width: 100%;
+    max-width: 400px;
+    background: #222;
+    padding: 20px;
+    border-radius: 12px;
+}
+input, button {
+    width: 100%;
+    padding: 12px;
+    margin-top: 10px;
+    border-radius: 8px;
+    border: none;
+}
+input { background: #333; color: white; }
+button { background: #4CAF50; color: white; font-weight: bold; }
+button.secondary { background: #555; }
+.hidden { display: none; }
+.status { margin-top: 15px; background: #000; padding: 10px; border-radius: 6px; }
+h2 { text-align: center; color: #4CAF50; }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+<div id="register">
+    <h2>Register</h2>
+    <input id="rName" placeholder="Full name">
+    <input id="rPhone" placeholder="Phone">
+    <input id="rPass" type="password" placeholder="Password">
+    <button onclick="register()">Create Account</button>
+    <button class="secondary" onclick="show('login')">Login</button>
+</div>
+
+<div id="login" class="hidden">
+    <h2>Login</h2>
+    <input id="lPhone" placeholder="Phone">
+    <input id="lPass" type="password" placeholder="Password">
+    <button onclick="login()">Login</button>
+    <button class="secondary" onclick="show('register')">Back</button>
+</div>
+
+<div id="app" class="hidden">
+    <h2 id="welcome"></h2>
+    <p style="text-align:center">
+        Balance: <b id="balance">0</b>
+    </p>
+    <hr>
+    <input id="toPhone" placeholder="Recipient phone">
+    <input id="amount" type="number" placeholder="Amount">
+    <button onclick="sendMoney()">Send Money</button>
+    <button class="secondary" onclick="location.reload()">Logout</button>
+</div>
+
+<div id="status" class="status">Waiting…</div>
+
+</div>
+
+<script>
+const API = "http://localhost:3000/api";
+let user = null;
+
+function show(id) {
+    ['register','login','app'].forEach(v =>
+        document.getElementById(v).classList.add('hidden')
+    );
+    document.getElementById(id).classList.remove('hidden');
+}
+
+function status(msg) {
+    document.getElementById('status').innerText = msg;
+}
+
+async function register() {
+    const res = await fetch(`${API}/register`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+            name: rName.value,
+            phone: rPhone.value,
+            password: rPass.value
+        })
+    });
+    const d = await res.json();
+    status(d.message || d.error);
+    if (d.message) show('login');
+}
+
+async function login() {
+    const res = await fetch(`${API}/login`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+            phone: lPhone.value,
+            password: lPass.value
+        })
+    });
+    const d = await res.json();
+    if (!d.success) return status(d.error);
+
+    user = d.user;
+    welcome.innerText = "Hello " + user.full_name;
+    balance.innerText = "Ksh " + user.balance;
+    show('app');
+    status("Logged in");
+}
+
+async function sendMoney() {
+    const amt = Number(amount.value);
+
+    const res = await fetch(`${API}/send`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+            fromPhone: user.phone,
+            toPhone: toPhone.value,
+            amount: amt
+        })
+    });
+
+    const d = await res.json();
+
+    if (!res.ok) return status(d.error);
+
+    user.balance = d.balance;
+    balance.innerText = "Ksh " + d.balance;
+    status(d.message);
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Admin - Funding Tool</title>
+    <style>
+        body { font-family: sans-serif; background: #121212; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .fund-box { background: #1e1e1e; border: 2px solid #4CAF50; padding: 30px; border-radius: 15px; width: 320px; text-align: center; }
+        input { width: 100%; padding: 12px; margin: 10px 0; border-radius: 8px; border: 1px solid #444; background: #121212; color: white; box-sizing: border-box; }
+        button { width: 100%; padding: 12px; background: #4CAF50; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; transition: 0.3s; }
+        button:hover { background: #45a049; }
+        #status { margin-top: 15px; color: #aaa; font-size: 14px; }
+    </style>
+</head>
+<body>
+
+<div class="fund-box">
+    <h2 style="color: #4CAF50; margin-top: 0;">Fund Account</h2>
+    <p>Enter details to add balance</p>
+    <input type="text" id="phone" placeholder="User Phone Number">
+    <input type="number" id="amount" placeholder="Amount (e.g. 5000)">
+    <button onclick="submitFunds()">Add Funds Now</button>
+    <p id="status"></p>
+</div>
+
+<script>
+    async function submitFunds() {
+        const phone = document.getElementById('phone').value;
+        const amount = document.getElementById('amount').value;
+        const status = document.getElementById('status');
+
+        if(!phone || !amount) {
+            status.innerText = "Please fill all fields";
+            return;
+        }
+
+        status.innerText = "Processing...";
+
+        try {
+            const response = await fetch('http://localhost:3000/api/fund', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone, amount })
+            });
+            const result = await response.json();
+            
+            if (result.message) {
+                status.style.color = "#4CAF50";
+                status.innerText = result.message;
+            } else {
+                status.style.color = "#ff5252";
+                status.innerText = result.error;
+            }
+        } catch (err) {
+            status.innerText = "Error: Backend not running";
+        }
+    }
+</script>
+</body>
+</html>
