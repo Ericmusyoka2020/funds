@@ -1,4 +1,3 @@
-
 const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
@@ -8,6 +7,7 @@ app.use(cors());
 app.use(express.json());
 
 // ✅ Supabase credentials
+// Note: It is highly recommended to move these to environment variables (process.env)
 const SUPABASE_URL = 'https://rhigklbvrqsngzcbdlkm.supabase.co';
 const SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJoaWdrbGJ2cnFzbmd6Y2JkbGttIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MDYzMjA0MSwiZXhwIjoyMDg2MjA4MDQxfQ.9SCc26l_5GWUwAP83AFBl7aPzMcKugpYKoK-IucXE6A';
 
@@ -16,16 +16,24 @@ const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
 });
 
 /* =========================
-   1. REGISTER
+   1. REGISTER (Updated with Duplicate Check)
 ========================= */
 app.post('/api/register', async (req, res) => {
   try {
     const { phone, password, name } = req.body;
+    
     const { error } = await supabase
       .from('profiles')
       .insert([{ phone, password, full_name: name, balance: 0 }]);
 
-    if (error) return res.status(400).json({ error: error.message });
+    if (error) {
+      // Check if error is due to the phone number already existing
+      if (error.code === '23505' || error.message.includes('unique constraint')) {
+        return res.status(400).json({ error: 'Phone number already exists. Please login.' });
+      }
+      return res.status(400).json({ error: error.message });
+    }
+
     res.json({ message: 'Account created successfully!' });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -53,7 +61,7 @@ app.post('/api/login', async (req, res) => {
 });
 
 /* =========================
-   3. RESET / CHANGE PIN (NEW)
+   3. RESET / CHANGE PIN
 ========================= */
 app.post('/api/reset-pin', async (req, res) => {
   try {
@@ -65,7 +73,7 @@ app.post('/api/reset-pin', async (req, res) => {
       .eq('phone', phone)
       .select();
 
-    if (error || !data.length) {
+    if (error || !data || data.length === 0) {
       return res.status(404).json({ error: 'User not found or update failed' });
     }
 
@@ -76,7 +84,7 @@ app.post('/api/reset-pin', async (req, res) => {
 });
 
 /* =========================
-   4. FUND ACCOUNT (Updated)
+   4. FUND ACCOUNT
 ========================= */
 app.post('/api/fund', async (req, res) => {
   try {
@@ -98,7 +106,6 @@ app.post('/api/fund', async (req, res) => {
 
     if (error) throw error;
 
-    // Return newBalance so the frontend updates immediately
     res.json({ message: `Funded!`, newBalance: newBalance });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -106,36 +113,43 @@ app.post('/api/fund', async (req, res) => {
 });
 
 /* =========================
-   5. SEND MONEY
+   5. SEND MONEY (Fixed Logic)
 ========================= */
 app.post('/api/send', async (req, res) => {
   try {
     const { fromPhone, toPhone, amount } = req.body;
-    if (!amount || amount <= 0) return res.status(400).json({ error: 'Invalid amount' });
+    const sendAmt = Number(amount);
 
-    const { data: sender } = await supabase
-      .from('profiles')
-      .select('balance')
-      .eq('phone', fromPhone)
-      .single();
+    if (!sendAmt || sendAmt <= 0) return res.status(400).json({ error: 'Invalid amount' });
+    if (fromPhone === toPhone) return res.status(400).json({ error: 'Cannot send money to yourself' });
+
+    // 1. Get Sender and Recipient Details
+    const { data: sender } = await supabase.from('profiles').select('balance').eq('phone', fromPhone).single();
+    const { data: recipient } = await supabase.from('profiles').select('balance').eq('phone', toPhone).single();
 
     if (!sender) return res.status(404).json({ error: 'Sender not found' });
-    if (sender.balance < amount) return res.status(400).json({ error: 'No funds. Fund account.' });
+    if (!recipient) return res.status(404).json({ error: 'Recipient phone not registered' });
+    if (sender.balance < sendAmt) return res.status(400).json({ error: 'Insufficient funds. Please fund your account.' });
 
-    const newBalance = sender.balance - amount;
+    // 2. Perform Transaction
+    const newSenderBalance = Number(sender.balance) - sendAmt;
+    const newRecipientBalance = Number(recipient.balance) + sendAmt;
 
-    await supabase
-      .from('profiles')
-      .update({ balance: newBalance })
-      .eq('phone', fromPhone);
+    // Update Sender
+    const { error: senderErr } = await supabase.from('profiles').update({ balance: newSenderBalance }).eq('phone', fromPhone);
+    if (senderErr) throw senderErr;
+
+    // Update Recipient
+    const { error: recipientErr } = await supabase.from('profiles').update({ balance: newRecipientBalance }).eq('phone', toPhone);
+    if (recipientErr) throw recipientErr;
 
     res.json({
       success: true,
-      message: `Ksh ${amount} sent to ${toPhone}`,
-      balance: newBalance
+      message: `Ksh ${sendAmt} sent to ${toPhone}`,
+      balance: newSenderBalance
     });
   } catch (err) {
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: 'Transaction failed on server' });
   }
 });
 
