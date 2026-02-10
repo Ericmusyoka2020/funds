@@ -1,4 +1,3 @@
-
 const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
@@ -82,68 +81,107 @@ app.post('/api/reset-pin', async (req, res) => {
 });
 
 /* =========================
-   4. FUND or WITHDRAW ACCOUNT
-   Use positive amount  → Fund
-   Use negative amount → Withdraw
+   4. FUND or WITHDRAW (Admin/External)
+   - Positive amount → Deposit / Fund
+   - Negative amount → Withdraw
+   - Always fetches balance after update to confirm
 ========================= */
 app.post('/api/fund', async (req, res) => {
   try {
     const { phone, amount } = req.body;
 
-    // Validate amount
+    // Validate input
     const transactionAmount = Number(amount);
-    if (!transactionAmount || transactionAmount === 0) {
-      return res.status(400).json({ error: 'Amount must be a non-zero number' });
+    if (isNaN(transactionAmount) || transactionAmount === 0) {
+      return res.status(400).json({ 
+        error: 'Amount must be a non-zero number' 
+      });
     }
 
-    // Get current user
+    // 1. Get current user info
     const { data: user, error: fetchError } = await supabase
+      .from('profiles')
+      .select('id, balance, full_name')
+      .eq('phone', phone)
+      .single();
+
+    if (fetchError || !user) {
+      return res.status(404).json({ 
+        error: 'User not found' 
+      });
+    }
+
+    const currentBalance = Number(user.balance);
+    const newCalculatedBalance = currentBalance + transactionAmount;
+
+    // 2. Prevent going negative on withdrawal
+    if (transactionAmount < 0 && Math.abs(transactionAmount) > currentBalance) {
+      return res.status(400).json({ 
+        error: 'Insufficient balance for withdrawal',
+        requested: Math.abs(transactionAmount),
+        available: currentBalance,
+        phone
+      });
+    }
+
+    // 3. Update balance
+    const { error: updateError } = await supabase
+      .from('profiles')
+      .update({ balance: newCalculatedBalance })
+      .eq('phone', phone);
+
+    if (updateError) {
+      console.error('Balance update failed:', updateError);
+      throw updateError;
+    }
+
+    // 4. Fetch the updated balance to confirm the real value
+    const { data: updatedUser, error: refetchError } = await supabase
       .from('profiles')
       .select('balance')
       .eq('phone', phone)
       .single();
 
-    if (fetchError || !user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    const currentBalance = Number(user.balance);
-    const newBalance = currentBalance + transactionAmount;
-
-    // For withdrawals: check if enough balance
-    if (transactionAmount < 0 && Math.abs(transactionAmount) > currentBalance) {
-      return res.status(400).json({ 
-        error: 'Insufficient balance for withdrawal',
-        currentBalance
+    if (refetchError || !updatedUser) {
+      console.error('Failed to verify balance after update:', refetchError);
+      // Fallback to calculated value but warn
+      return res.status(200).json({
+        success: true,
+        warning: 'Balance updated but could not verify latest database value',
+        type: transactionAmount > 0 ? 'deposit' : 'withdrawal',
+        amount: Math.abs(transactionAmount),
+        previousBalance: currentBalance,
+        newBalance: newCalculatedBalance,
+        phone,
+        userName: user.full_name || null,
+        timestamp: new Date().toISOString()
       });
     }
 
-    // Update balance
-    const { error: updateError } = await supabase
-      .from('profiles')
-      .update({ balance: newBalance })
-      .eq('phone', phone);
+    const confirmedNewBalance = Number(updatedUser.balance);
 
-    if (updateError) throw updateError;
-
-    // Determine message based on transaction type
+    // 5. Success response
     const isDeposit = transactionAmount > 0;
-    const message = isDeposit 
-      ? `Funded successfully!`
-      : `Withdrawn successfully!`;
 
     res.json({
       success: true,
-      message,
+      message: isDeposit 
+        ? `Account funded successfully` 
+        : `Withdrawal processed successfully`,
       type: isDeposit ? 'deposit' : 'withdrawal',
       amount: Math.abs(transactionAmount),
-      newBalance,
-      previousBalance: currentBalance
+      previousBalance: currentBalance,
+      newBalance: confirmedNewBalance,
+      phone,
+      userName: user.full_name || null,
+      timestamp: new Date().toISOString()
     });
 
   } catch (err) {
-    console.error('Fund/Withdraw error:', err);
-    res.status(500).json({ error: 'Server error' });
+    console.error('Fund/withdraw error:', err);
+    res.status(500).json({ 
+      error: 'Server error while processing transaction' 
+    });
   }
 });
 
@@ -158,7 +196,7 @@ app.post('/api/send', async (req, res) => {
     if (!sendAmt || sendAmt <= 0) return res.status(400).json({ error: 'Invalid amount' });
     if (fromPhone === toPhone) return res.status(400).json({ error: 'Cannot send to yourself' });
 
-    // 1. Check Sender Balance
+    // 1. Check sender balance
     const { data: sender, error: senderErr } = await supabase
       .from('profiles')
       .select('balance')
@@ -169,7 +207,7 @@ app.post('/api/send', async (req, res) => {
 
     if (Number(sender.balance) < sendAmt) {
       return res.status(400).json({ 
-        error: 'Insufficient funds. Please fund your account.',
+        error: 'Insufficient funds',
         balance: Number(sender.balance)
       });
     }
@@ -183,7 +221,7 @@ app.post('/api/send', async (req, res) => {
 
     if (deductErr) throw deductErr;
 
-    // 3. Credit recipient if they exist
+    // 3. Credit recipient if registered
     const { data: recipient } = await supabase
       .from('profiles')
       .select('balance')
@@ -196,10 +234,6 @@ app.post('/api/send', async (req, res) => {
         .from('profiles')
         .update({ balance: newRecipientBalance })
         .eq('phone', toPhone);
-      
-      console.log(`Money credited to: ${toPhone}`);
-    } else {
-      console.log(`Money deducted, but ${toPhone} is not registered.`);
     }
 
     // 4. Success response
@@ -210,7 +244,7 @@ app.post('/api/send', async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Transaction Error:", err);
+    console.error("Send money error:", err);
     res.status(500).json({ error: 'Transaction failed' });
   }
 });
