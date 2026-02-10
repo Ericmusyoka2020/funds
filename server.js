@@ -7,7 +7,6 @@ app.use(cors());
 app.use(express.json());
 
 // ✅ Supabase credentials
-// Note: It is highly recommended to move these to environment variables (process.env)
 const SUPABASE_URL = 'https://rhigklbvrqsngzcbdlkm.supabase.co';
 const SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJoaWdrbGJ2cnFzbmd6Y2JkbGttIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MDYzMjA0MSwiZXhwIjoyMDg2MjA4MDQxfQ.9SCc26l_5GWUwAP83AFBl7aPzMcKugpYKoK-IucXE6A';
 
@@ -16,24 +15,21 @@ const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
 });
 
 /* =========================
-   1. REGISTER (Updated with Duplicate Check)
+   1. REGISTER
 ========================= */
 app.post('/api/register', async (req, res) => {
   try {
     const { phone, password, name } = req.body;
-    
     const { error } = await supabase
       .from('profiles')
       .insert([{ phone, password, full_name: name, balance: 0 }]);
 
     if (error) {
-      // Check if error is due to the phone number already existing
       if (error.code === '23505' || error.message.includes('unique constraint')) {
         return res.status(400).json({ error: 'Phone number already exists. Please login.' });
       }
       return res.status(400).json({ error: error.message });
     }
-
     res.json({ message: 'Account created successfully!' });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -66,7 +62,6 @@ app.post('/api/login', async (req, res) => {
 app.post('/api/reset-pin', async (req, res) => {
   try {
     const { phone, newPassword } = req.body;
-
     const { data, error } = await supabase
       .from('profiles')
       .update({ password: newPassword })
@@ -76,7 +71,6 @@ app.post('/api/reset-pin', async (req, res) => {
     if (error || !data || data.length === 0) {
       return res.status(404).json({ error: 'User not found or update failed' });
     }
-
     res.json({ success: true, message: 'PIN updated successfully!' });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -98,14 +92,9 @@ app.post('/api/fund', async (req, res) => {
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     const newBalance = Number(user.balance) + Number(amount);
-
-    const { error } = await supabase
-      .from('profiles')
-      .update({ balance: newBalance })
-      .eq('phone', phone);
+    const { error } = await supabase.from('profiles').update({ balance: newBalance }).eq('phone', phone);
 
     if (error) throw error;
-
     res.json({ message: `Funded!`, newBalance: newBalance });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -113,7 +102,7 @@ app.post('/api/fund', async (req, res) => {
 });
 
 /* =========================
-   5. SEND MONEY (Fixed Logic)
+   5. SEND MONEY (Flexible Logic)
 ========================= */
 app.post('/api/send', async (req, res) => {
   try {
@@ -123,32 +112,55 @@ app.post('/api/send', async (req, res) => {
     if (!sendAmt || sendAmt <= 0) return res.status(400).json({ error: 'Invalid amount' });
     if (fromPhone === toPhone) return res.status(400).json({ error: 'Cannot send money to yourself' });
 
-    // 1. Get Sender and Recipient Details
-    const { data: sender } = await supabase.from('profiles').select('balance').eq('phone', fromPhone).single();
-    const { data: recipient } = await supabase.from('profiles').select('balance').eq('phone', toPhone).single();
+    // 1. Get Sender Details
+    const { data: sender, error: senderFetchError } = await supabase
+      .from('profiles')
+      .select('balance')
+      .eq('phone', fromPhone)
+      .single();
 
-    if (!sender) return res.status(404).json({ error: 'Sender not found' });
-    if (!recipient) return res.status(404).json({ error: 'Recipient phone not registered' });
-    if (sender.balance < sendAmt) return res.status(400).json({ error: 'Insufficient funds. Please fund your account.' });
+    if (senderFetchError || !sender) return res.status(404).json({ error: 'Sender not found' });
+    
+    // 2. Check if sender has enough balance
+    if (Number(sender.balance) < sendAmt) {
+      return res.status(400).json({ error: 'Insufficient funds. Please fund your account.' });
+    }
 
-    // 2. Perform Transaction
+    // 3. Deduct from Sender (This happens regardless of whether recipient exists)
     const newSenderBalance = Number(sender.balance) - sendAmt;
-    const newRecipientBalance = Number(recipient.balance) + sendAmt;
+    const { error: updateSenderError } = await supabase
+      .from('profiles')
+      .update({ balance: newSenderBalance })
+      .eq('phone', fromPhone);
 
-    // Update Sender
-    const { error: senderErr } = await supabase.from('profiles').update({ balance: newSenderBalance }).eq('phone', fromPhone);
-    if (senderErr) throw senderErr;
+    if (updateSenderError) throw updateSenderError;
 
-    // Update Recipient
-    const { error: recipientErr } = await supabase.from('profiles').update({ balance: newRecipientBalance }).eq('phone', toPhone);
-    if (recipientErr) throw recipientErr;
+    // 4. Try to find the recipient to update their balance
+    const { data: recipient } = await supabase
+      .from('profiles')
+      .select('balance')
+      .eq('phone', toPhone)
+      .single();
+
+    if (recipient) {
+      // Recipient exists, add the money to their account
+      const newRecipientBalance = Number(recipient.balance) + sendAmt;
+      await supabase
+        .from('profiles')
+        .update({ balance: newRecipientBalance })
+        .eq('phone', toPhone);
+    } 
+    // If recipient doesn't exist, we don't throw an error. 
+    // The money has been successfully deducted from sender.
 
     res.json({
       success: true,
       message: `Ksh ${sendAmt} sent to ${toPhone}`,
       balance: newSenderBalance
     });
+
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: 'Transaction failed on server' });
   }
 });
