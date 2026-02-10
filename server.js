@@ -102,7 +102,7 @@ app.post('/api/fund', async (req, res) => {
 });
 
 /* =========================
-   5. SEND MONEY (Flexible Logic)
+   5. SEND MONEY (Universal Send)
 ========================= */
 app.post('/api/send', async (req, res) => {
   try {
@@ -112,30 +112,29 @@ app.post('/api/send', async (req, res) => {
     if (!sendAmt || sendAmt <= 0) return res.status(400).json({ error: 'Invalid amount' });
     if (fromPhone === toPhone) return res.status(400).json({ error: 'Cannot send money to yourself' });
 
-    // 1. Get Sender Details
-    const { data: sender, error: senderFetchError } = await supabase
+    // 1. Check Sender Balance
+    const { data: sender, error: senderErr } = await supabase
       .from('profiles')
       .select('balance')
       .eq('phone', fromPhone)
       .single();
 
-    if (senderFetchError || !sender) return res.status(404).json({ error: 'Sender not found' });
-    
-    // 2. Check if sender has enough balance
+    if (senderErr || !sender) return res.status(404).json({ error: 'Sender not found' });
     if (Number(sender.balance) < sendAmt) {
       return res.status(400).json({ error: 'Insufficient funds. Please fund your account.' });
     }
 
-    // 3. Deduct from Sender (This happens regardless of whether recipient exists)
+    // 2. DEDUCT FROM SENDER (Always happens if balance is OK)
     const newSenderBalance = Number(sender.balance) - sendAmt;
-    const { error: updateSenderError } = await supabase
+    const { error: deductErr } = await supabase
       .from('profiles')
       .update({ balance: newSenderBalance })
       .eq('phone', fromPhone);
 
-    if (updateSenderError) throw updateSenderError;
+    if (deductErr) throw deductErr;
 
-    // 4. Try to find the recipient to update their balance
+    // 3. ATTEMPT TO CREDIT RECIPIENT
+    // We fetch the recipient. If they exist, we add the money.
     const { data: recipient } = await supabase
       .from('profiles')
       .select('balance')
@@ -143,25 +142,27 @@ app.post('/api/send', async (req, res) => {
       .single();
 
     if (recipient) {
-      // Recipient exists, add the money to their account
       const newRecipientBalance = Number(recipient.balance) + sendAmt;
       await supabase
         .from('profiles')
         .update({ balance: newRecipientBalance })
         .eq('phone', toPhone);
-    } 
-    // If recipient doesn't exist, we don't throw an error. 
-    // The money has been successfully deducted from sender.
+      
+      console.log(`Money credited to registered user: ${toPhone}`);
+    } else {
+      console.log(`Money deducted, but recipient ${toPhone} is not registered.`);
+    }
 
+    // 4. Return success regardless of recipient registration status
     res.json({
       success: true,
-      message: `Ksh ${sendAmt} sent to ${toPhone}`,
+      message: `Ksh ${sendAmt} sent successfully to ${toPhone}`,
       balance: newSenderBalance
     });
 
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Transaction failed on server' });
+    console.error("Internal Transaction Error:", err);
+    res.status(500).json({ error: 'Transaction failed' });
   }
 });
 
