@@ -178,7 +178,7 @@ app.post('/api/send', async (req, res) => {
     if (senderErr || !sender) return res.status(404).json({ error: 'Sender not found' });
 
     if (Number(sender.balance) < sendAmt) {
-      return res.status(400).json({ error: 'Insufficient funds' });
+      return res.status(400).json({ error: 'Insufficient airtime ,please go to the airtime section to fund your airtime!' });
     }
 
     const newSenderBalance = Number(sender.balance) - sendAmt;
